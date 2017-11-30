@@ -8,6 +8,7 @@ const char DB_NAME_KEY[16] = "db2.name";
 const char DB_USER_KEY[16] = "db2.username";
 const char DB_PASS_KEY[16] = "db2.password";
 const char BATCH_KEY[16] = "p2.batch.input";
+int currentid;
 
 struct sqlca sqlca;
 
@@ -66,6 +67,32 @@ static void close_db();
 void mainMenu();
 void promptNewUser();
 void customerMainMenu();
+
+static int isActive(char* accNum){
+  struct sqlca sqlca;
+  acc_num = atoi(accNum);
+  EXEC SQL DECLARE check CURSOR FOR SELECT STATUS FROM P2.ACCOUNT WHERE NUMBER = :acc_num;
+  EXEC SQL OPEN check;
+  EXEC SQL FETCH check INTO :acc_status;
+  if (sqlca.sqlcode != 100){
+    if(acc_status == 'A')  {
+      close_db();
+      open_db();
+      return 1;
+    }
+    else {
+      close_db();
+      open_db();
+      return 0;
+    }
+  }
+  else {
+    close_db();
+    open_db();
+    return 0;
+  }
+}
+
 /**
  * Create a new customer.
  * @param name customer name
@@ -87,17 +114,18 @@ static void newCustomer(char* name, char* gender, char* age, char* pin)
   if(sqlca.sqlcode == -545){
       printf("One of your inputs does not satisfy the constraints of the database\n" );
   }
-   if (sqlca.sqlcode == 100)
+   else if (sqlca.sqlcode == 100)
    {
      printf(":: ERROR - SELECTING ID\n");
    }
-   if (sqlca.sqlcode != 100)
+   else if (sqlca.sqlcode != 100)
    {
      printf(":: NEW CUSTOMER ID: %d\n", resultID);
+     printf(":: CREATE NEW CUSTOMER - SUCCESS\n");
    }
+  EXEC SQL CLOSE n1;
   close_db();
   open_db();
-  printf(":: CREATE NEW CUSTOMER - SUCCESS\n");
 }
 
 static void validateCustomer(char* id, char* pin){
@@ -121,12 +149,15 @@ static void validateCustomer(char* id, char* pin){
       }
       else
       {
+        currentid = atoi(id);
         printf(":: VALIDATE CUSTOMER - SUCCESS\n");
         EXEC SQL CLOSE v1;
         customerMainMenu();
       }
    }
-
+   EXEC SQL CLOSE v1;
+   close_db();
+   open_db();
 }
 /**
  * Open a new account.
@@ -142,10 +173,23 @@ static void openAccount(char* id, char* type, char* amount)
   amountInput = atoi(amount);
   strcpy(cA, "A");
   //printf("INSERT INTO P2.ACCOUNT(ID, BALANCE, TYPE, STATUS) VALUES ('%d','%s','%d','%s')", idInput, typeInput, amountInput, cA);
-  EXEC SQL INSERT INTO P2.ACCOUNT(ID, BALANCE, TYPE, STATUS) VALUES (:idInput, :amountInput, :typeInput,:cA);
+  EXEC SQL DECLARE open CURSOR FOR SELECT NUMBER FROM FINAL TABLE(INSERT INTO P2.ACCOUNT(ID, BALANCE, TYPE, STATUS) VALUES (:idInput, :amountInput, :typeInput,:cA));
+  EXEC SQL OPEN open;
+  EXEC SQL FETCH open INTO :acc_num;
+  if (sqlca.sqlcode == -501){
+    printf(":: ERROR - ID does not existed in the customer table\n");
+  }
+  else if (sqlca.sqlcode == -545){
+    printf(":: ERROR - One of your inputs does not satisfy the constraints of the database.\n");
+  }
+  else if (sqlca.sqlcode != 100)
+  {
+    printf(":: NEW ACCOUNT NUMBER: %d\n", acc_num);
+    printf(":: OPEN ACCOUNT - SUCCESS\n");
+  }
+  EXEC SQL CLOSE open;
   close_db();
   open_db();
-  printf(":: OPEN ACCOUNT - SUCCESS\n");
 }
 
 /**
@@ -155,10 +199,13 @@ static void openAccount(char* id, char* type, char* amount)
 static void closeAccount(char* accNum)
 {
   printf(":: CLOSE ACCOUNT - RUNNING\n");
-  closeAccountNum = atoi(accNum);
-  strcpy(cI, "I");
-  EXEC SQL UPDATE P2.ACCOUNT SET STATUS = :cI, BALANCE = 0 WHERE NUMBER = :closeAccountNum;
-  printf(":: CLOSE ACCOUNT - SUCCESS\n");
+  if(isActive(accNum)){
+    closeAccountNum = atoi(accNum);
+    strcpy(cI, "I");
+    EXEC SQL UPDATE P2.ACCOUNT SET STATUS = :cI, BALANCE = 0 WHERE NUMBER = :closeAccountNum;
+    printf(":: CLOSE ACCOUNT - SUCCESS\n");
+  }
+  else printf(":: ERROR - ACCOUNT IS NOT ACTIVE\n");
   close_db();
   open_db();
 }
@@ -171,10 +218,13 @@ static void closeAccount(char* accNum)
 static void deposit(char* accNum, char* amount)
 {
   printf(":: DEPOSIT - RUNNING\n");
+  if(isActive(accNum)){
   daccNum = atoi(accNum);
   damount = atoi(amount);
   EXEC SQL UPDATE P2.ACCOUNT SET BALANCE = BALANCE + :damount WHERE NUMBER = :daccNum;
   printf(":: DEPOSIT - SUCCESS\n");
+  }
+  else printf(":: ERROR - ACCOUNT IS NOT ACTIVE\n");
   close_db();
   open_db();
 }
@@ -187,10 +237,13 @@ static void deposit(char* accNum, char* amount)
 static void withdraw(char* accNum, char* amount)
 {
   printf(":: WITHDRAW - RUNNING\n");
+  if(isActive(accNum)){
   waccNum = atoi(accNum);
   wamount = atoi(amount);
   EXEC SQL UPDATE P2.ACCOUNT SET BALANCE = BALANCE + :wamount WHERE NUMBER = :waccNum;
   printf(":: WITHDRAW - SUCCESS\n");
+  }
+  else printf(":: ERROR - ACCOUNT IS NOT ACTIVE\n");
   close_db();
   open_db();
 }
@@ -204,12 +257,15 @@ static void withdraw(char* accNum, char* amount)
 static void transfer(char* srcAccNum, char* destAccNum, char* amount)
 {
   printf(":: TRANSFER - RUNNING\n");
+  if(isActive(srcAccNum) && isActive(destAccNum)){
   src_cid = atoi(srcAccNum);
   dest_cid = atoi(destAccNum);
   trans_amt = atoi(amount);
   EXEC SQL UPDATE P2.ACCOUNT SET BALANCE = BALANCE - :trans_amt WHERE NUMBER = :src_cid;
   EXEC SQL UPDATE P2.ACCOUNT SET BALANCE = BALANCE + :trans_amt WHERE NUMBER = :dest_cid;
   printf(":: TRANSFER - SUCCESS\n");
+  }
+  else printf(":: ERROR - ONE OF THE ACCOUNTS IS NOT ACTIVE\n");
   close_db();
   open_db();
 }
@@ -528,21 +584,133 @@ int checkLetter(char* input){
   }
   return 1;
 }
+void adminMainMenu(){
+  printf("--------------------------------------------------\nAdministrator Main Menu\n");
+  printf("1. Account Summary for a Customer\n2. Report A :: Customer Information with Total Balance in Decreasing Order\n3. Report B :: Find the Average Total Balance Between Age Groups\n4. Exit\n");
+}
 void customerMainMenu(){
   int option;
+  char id[3];
+  char type;
+  char depositAmount[10];
+  char accNum[4];
+  char accNumDes[4];
   printf("--------------------------------------------------\nCustomer Main Menu:\n1.Open Account\n2.Close Account\n3.Deposit\n4.Withdraw\n5.Transfer\n6.Account Summary\n7.Exit\n");
   fscanf(stdin,"%d", &option);
   switch (option) {
-    case 1: printf("Entered 1\n");
-    case 2: printf("Entered 2\n");
-    case 3: printf("Entered 3\n");
-    case 4: printf("Entered 4\n");
-    case 5: printf("Entered 5\n");
-    case 6: printf("Entered 6\n");
+    case 1: {
+      printf("--------------------------------------------------\nOPEN NEW ACCOUNT\n");
+      printf("ID: \n");
+      scanf("%s", id);
+      while (getchar() != '\n');
+      printf("Account Type (C for Checking OR S for Saving)\n");
+      scanf("%c", &type);
+      while (getchar() != '\n');
+      printf("Initial Deposit Amount\n");
+      scanf("%s", depositAmount);
+      while (getchar() != '\n');
+      printf("COMPARE RESULT: %d\n", atoi(id) != currentid);
+      if(checkDigit(id) == 0 || strlen(id) != 3){
+          printf("ID needs to be 3 digits\n");
+      }
+      else if(type != 'C' && type != 'S'){
+          printf("Gender needs to be either C or S\n");
+      }
+      else if(checkDigit(depositAmount) == 0){
+          printf("Deposit must be a number\n");
+      }
+      else {
+          openAccount(id, &type, depositAmount);
+      }
+      customerMainMenu();
+      break;
+    }
+    case 2: {
+      printf("--------------------------------------------------\nCLOSE ACCOUNT\n");
+      printf("Account Number: \n");
+      scanf("%s", accNum);
+      if(checkDigit(accNum) == 0 || strlen(accNum) != 4){
+          printf("Please enter 4 digits for account number\n");
+      }
+      else {
+        closeAccount(accNum);
+      }
+      customerMainMenu();
+      break;
+    }
+    case 3: {
+      printf("--------------------------------------------------\nDEPOSIT MONEY\n");
+      printf("Account Number: \n");
+      scanf("%s", accNum);\
+      printf("Deposit Amount: \n");
+      scanf("%s", depositAmount);
+      if(checkDigit(accNum) == 0 || strlen(accNum) != 4){
+          printf("Please enter 4 digits for account number\n");
+      }
+      else if(checkDigit(depositAmount) == 0){
+          printf("Please enter digits for deposit account\n");
+      }
+      else {
+          deposit(accNum, depositAmount);
+      }
+      customerMainMenu();
+      break;
+    }
+    case 4: {
+      printf("--------------------------------------------------\nWITHDRAW MONEY\n");
+      printf("Account Number: \n");
+      scanf("%s", accNum);\
+      printf("Withdraw Amount: \n");
+      scanf("%s", depositAmount);
+      if(checkDigit(accNum) == 0 || strlen(accNum) != 4){
+          printf("Please enter 4 digits for account number\n");
+      }
+      else if(checkDigit(depositAmount) == 0){
+          printf("Please enter digits for withdraw account\n");
+      }
+      else {
+          withdraw(accNum, depositAmount);
+      }
+      customerMainMenu();
+      break;
+    }
+    case 5: {
+      printf("--------------------------------------------------\nTRANSFER MONEY\n");
+      printf("Source Account Number: \n");
+      scanf("%s", accNum);\
+      printf("Source Destination Number: \n");
+      scanf("%s", accNumDes);\
+      printf("Transfer Amount: \n");
+      scanf("%s", depositAmount);
+      if(checkDigit(accNum) == 0 || strlen(accNum) != 4 || checkDigit(accNumDes) == 0 || strlen(accNumDes) != 4 ){
+          printf("Please enter 4 digits for account number\n");
+      }
+      else if(checkDigit(depositAmount) == 0){
+          printf("Please enter digits for withdraw account\n");
+      }
+      else {
+          transfer(accNum, accNumDes, depositAmount);
+      }
+      customerMainMenu();
+      break;
+    }
+    case 6: {
+      printf("--------------------------------------------------\nACCOUNT SUMMARY FOR CUSTOMER ID: %d\n", currentid );
+      char id[3];
+      sprintf(id, "%d", currentid);
+      accountSummary(id);
+      customerMainMenu();
+      break;
+    }
     case 7:
     {
       printf("Entered 7\n");
       mainMenu();
+      break;
+    }
+    default:{
+      customerMainMenu();
+      break;
     }
   }
 }
@@ -555,7 +723,10 @@ void promptLogIn(){
     printf("PIN\n");
     scanf("%s", pin);
     while (getchar() != '\n');
-    if(checkDigit(id) == 0 || strlen(id) != 3){
+    if(atoi(id) == 0 && atoi(pin) == 0){
+       adminMainMenu();
+    }
+    else if(checkDigit(id) == 0 || strlen(id) != 3){
         printf("ID needs to be 3 digits\n");
         mainMenu();
     }
@@ -587,11 +758,6 @@ void promptNewUser(){
    printf("PIN\n");
    scanf("%s", pin);
    while (getchar() != '\n');
-
-   printf("Name %s\n",name);
-   printf("Gender %c\n",gender);
-   printf("Age %s\n",age);
-   printf("PIN %s\n",pin);
    if(name == NULL || age == NULL || pin == NULL || name[0] == '\n' || age[0] == '\n'|| pin[0] == '\n') {
      printf(":: ERROR - One of the required inputs is empty. Please try again.\n");
      mainMenu();
@@ -628,8 +794,7 @@ void mainMenu(){
      mainMenu();
   }
   else if(a == 3){
-     printf("Entered 3\n");
-     mainMenu();
+     exit(0);
   }
   else{
     printf("Please enter one digit to select the following options\n");
@@ -653,7 +818,7 @@ int main(int argc, char *argv[])
     test_connection();
     open_db();
     start();
-    // batch_run(argv[1]);
+    //batch_run(argv[1]);
     close_db();
   }
   return 0;
